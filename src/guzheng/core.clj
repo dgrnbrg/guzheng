@@ -45,3 +45,63 @@
                          (concat '(do (println "calling println"))
                                  node)
                          node))))
+
+#_(alter-var-root #'clojure.core/load
+                (fn [old-load]
+                  (fn custom-load
+                    [& paths]
+                    (doseq [^String path paths]
+                      (let [^String path (if (.startsWith path "/")
+                                             path
+                                             (str (#'clojure.core/root-directory (ns-name *ns*))
+                                                  \/ path))
+                            core (create-ns 'clojure.core)]
+                        (when #'clojure.core/*loading-verbosely*
+                          (printf "(clojure.core/load \"%s\")\n" path)
+                          (flush))
+                        (#'clojure.core/check-cyclic-dependency path)
+                        (when-not (= path (first (resolve core '*pending-paths*)))
+                          (binding [clojure.core/*pending-paths*
+                                    (conj (resolve core '*pending-paths*) path)]
+                            (-> (clojure.lang.RT/resourceAsStream
+                                    (clojure.lang.RT/baseLoader)
+                                    (.substring path 1))
+                              java.io.InputStreamReader.
+                              java.io.StringReader.
+                              .toString
+                              (instrument
+                                (partial postwalk
+                                         (fn [node]
+                                           (if (and (seqable? node)
+                                                    (= (first node) 'println))
+                                             (concat '(do (println "calling println"))
+                                                     node)
+                                             node)))) 
+                              )))))
+                    )))
+
+(defn run-test-instrumented
+  [f instrumented-nses & nses]
+  (doseq [ns instrumented-nses]
+    (-> clojure.lang.Compiler
+      .getClassLoader
+      (.getResourceAsStream (str (.replace (name ns) "." "/") ".clj"))
+      java.io.InputStreamReader.
+      slurp
+      (instrument f)))
+    (apply clojure.test/run-tests nses)) 
+
+;following is sample usage
+#_(guzheng.core/run-test-instrumented 
+         (partial clojure.walk/postwalk
+                  (fn [node]
+                    (if (and (seqable? node)
+                             (= (first node) 'println))
+                      (concat `(do (println (str "calling println with args: " '~(rest node))))
+                              node)
+                      node)))
+         ['guzheng.sample]
+         'guzheng.test.core)
+(comment
+  Need to set clojure.core/load to be a function that loads the given resource.
+  )
