@@ -1,3 +1,4 @@
-(defproject guzheng "1.0.0-SNAPSHOT"
-  :description "FIXME: write description"
-  :dependencies [[org.clojure/clojure "1.3.0"]])
+(defproject guzheng/guzheng "1.0.0-SNAPSHOT"
+  :description "guzheng: an instrumentation and code coverage library for Clojure"
+  :dependencies [[org.clojure/clojure "1.3.0"]]
+  :dev-dependencies [[lein-clojars "0.6.0"]])
