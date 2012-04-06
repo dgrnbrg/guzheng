@@ -64,6 +64,8 @@
                    ~(identity @*trace-id*) 
                    (merge
                      {:line ~(:line node) 
+                      :type ~(:type node)
+                      :ns (ns-name *ns*)
                       :ast '~ast}
                      ~branch-map)))
     @*trace-id*))
@@ -259,6 +261,47 @@
       slurp
       (instrument f)))
     (apply clojure.test/run-tests nses)) 
+
+(defn report-missing-coverage
+  []
+  (let [results (vals @main-trace-atom)]
+    (doseq [{:keys [type ast line ns] :as data} results]
+      (letfn [(report [msg stmt]
+                (println (str "in ns " ns ": "
+                              msg
+                              " is not covered in \""
+                              stmt
+                              "\" on line " line)))] 
+       (condp = type
+        :if (do
+              (when (zero? (:lhs data))
+                (report "true branch" "if"))
+              (when (zero? (:rhs data))
+                (report "false branch" "if")))
+         :cond (let [clauses (keep-indexed
+                               vector
+                               (partition 2 ast))]
+                 (doseq [[id clause] clauses]
+                   (when (zero? (get data id))
+                     (report (first clause) "cond"))))
+         :condp (let [ast (drop 2 ast)
+                      clauses (keep-indexed
+                               vector
+                               (partition 2 ast))
+                      final (if (odd? (count ast))
+                              [(-> (count ast)
+                                 dec
+                                 (/ 2))
+                               (vector "last clause"
+                                       (last ast))] 
+                              nil)
+                      clauses (if-not (nil? final)
+                                (conj clauses final)
+                                clauses)]
+                 (doseq [[id clause] clauses]
+                   (when (zero? (get data id))
+                     (report (first clause) "condp"))))
+         nil)))))
 
 ;following is sample usage
 #_(guzheng.core/run-test-instrumented 
