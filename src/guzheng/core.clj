@@ -65,18 +65,19 @@
                    (merge
                      {:line ~(:line node) 
                       :ast '~ast}
-                     ~branch-map)))))
+                     ~branch-map)))
+    @*trace-id*))
 
 (defn trace-branch
   "Takes a fragment of an ast branch
   and a branch id and generates
   a fragment that traces that branch."
-  [trace-atom branch id]
+  [trace-atom branch id branch-id]
   `(let [count# (get-in @~trace-atom
-                        [~(identity @*trace-id*) ~id])]
+                        [~id ~branch-id])]
      (swap! ~trace-atom
             assoc-in
-            [~(identity @*trace-id*) ~id]
+            [~id ~branch-id]
             (inc count#))
      ~branch))   
 
@@ -87,14 +88,16 @@
   a call to update its data from the
   *trace-atom* when the branch gets executed."
   [trace-atom node]
-  (register-branch trace-atom node :lhs :rhs)
-  (let [ast (:body node)]
+  (let [ast (:body node)
+        id (register-branch trace-atom node :lhs :rhs)]
     `(if ~(first ast)
        ~(trace-branch trace-atom
                       (nth ast 1)
+                      id
                       :lhs)
        ~(trace-branch trace-atom
                       (nth ast 2)
+                      id
                       :rhs))))
 
 (defn branchdetect-cond
@@ -102,12 +105,14 @@
   (let [clauses (partition 2 (:body node))
         branch-ids (range (count clauses))
         conditions (map first clauses)
-        branches (map second clauses)]
-    (apply register-branch trace-atom node branch-ids) 
+        branches (map second clauses)
+        id (apply register-branch
+                  trace-atom node branch-ids)]
     `(cond ~@(interleave
                conditions
                (map (partial trace-branch trace-atom)
                     branches
+                    (repeat id)
                     branch-ids)))))
 
 (defn branchdetect-condp
@@ -122,21 +127,24 @@
                   (butlast clauses)
                   clauses)
         conditions (map first clauses)
-        branches (map second clauses)]
+        branches (map second clauses)
+        id (apply register-branch
+                  trace-atom node branch-ids)]
     (clojure.pprint/pprint [:final final-clause])
-  (apply register-branch trace-atom node branch-ids) 
     (let [without-final
           `(condp ~(first (:body node)) ~(second (:body node))
              ~@(interleave
                  conditions
                  (map (partial trace-branch trace-atom)
                       branches
+                      (repeat id)
                       branch-ids))
              )]
       (if final-clause
         (concat without-final
                 (list (trace-branch trace-atom
                                     final-clause
+                                    id
                                     (last branch-ids))))
         without-final))))
 
