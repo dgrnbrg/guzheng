@@ -24,3 +24,7 @@
     (= x "hi") 22
     (= x 22) "blah"
     :else "you win!"))
+
+(defn uncalled-for [] (if true (println "You should never see this") ))
+
+(def foo (fn [x] (inc x)))

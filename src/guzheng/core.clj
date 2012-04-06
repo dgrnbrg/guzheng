@@ -103,6 +103,35 @@
                       id
                       :rhs))))
 
+(defn index-of-first
+  [pred s]
+  (loop [i 0 s (seq s)]
+    (if (pred (first s))
+      i
+      (recur (inc i) (next s)))))
+
+(defn branchdetect-defn
+  [trace-atom node]
+  (let [ast (:body node)
+        [name-args body] (split-at (inc (index-of-first vector? ast)) ast)
+        id (register-branch trace-atom node :main)]
+    `(defn ~@name-args
+       ~(trace-branch trace-atom
+                       `(do ~@body)
+                       id
+                       :main))))
+
+(defn branchdetect-fn
+  [trace-atom node]
+  (let [ast (:body node)
+        [name-args body] (split-at (inc (index-of-first vector? ast)) ast)
+        id (register-branch trace-atom node :main)]
+    `(fn ~@name-args
+       ~(trace-branch trace-atom
+                       `(do ~@body)
+                       id
+                       :main))))
+
 (defn branchdetect-cond
   [trace-atom node]
   (let [clauses (partition 2 (:body node))
@@ -133,7 +162,6 @@
         branches (map second clauses)
         id (apply register-branch
                   trace-atom node branch-ids)]
-    (clojure.pprint/pprint [:final final-clause])
     (let [without-final
           `(condp ~(first (:body node)) ~(second (:body node))
              ~@(interleave
@@ -170,7 +198,9 @@
                     'if {::trace true
                          :type :if
                          :line line
-                         :body (rest node)}
+                         :body (if (= 3 (count node))
+                                 (conj (rest node) nil)
+                                 (rest node))}  
                     'cond {::trace true
                            :type :cond
                            :line line
@@ -179,14 +209,14 @@
                             :type :condp
                             :line line
                             :body (rest node)} 
-                    ;'fn {::trace true
-                    ;     :type :fn
-                    ;     :line line
-                    ;     :body (rest node)}
-                    ;'defn {::trace true
-                    ;       :type :defn
-                    ;       :line line
-                    ;       :body (rest node)}
+                    'fn {::trace true
+                         :type :fn
+                         :line line
+                         :body (rest node)}
+                    'defn {::trace true
+                           :type :defn
+                           :line line
+                           :body (rest node)}
                     node))
                 node))
             ast)
@@ -201,10 +231,10 @@
                           trace-atom node)
                   :condp (branchdetect-condp
                            trace-atom node)
-                  ;:fn (branchdetect-fn
-                  ;      trace-atom node)
-                  ;:defn (branchdetect-fn
-                  ;        trace-atom node)
+                  :fn (branchdetect-fn
+                        trace-atom node)
+                  :defn (branchdetect-defn
+                          trace-atom node)
                   (throw (RuntimeException.
                            (str "Cannot trace "
                                 (:type node)))))
@@ -279,6 +309,14 @@
                 (report "true branch" "if"))
               (when (zero? (:rhs data))
                 (report "false branch" "if")))
+         :defn (do
+               (when (zero? (:main data))
+                 (report (first ast) "defn")))
+         :fn (do
+               (when (zero? (:main data))
+                 (report (if (string? (first ast))
+                           (first ast)
+                           "body") "fn")))
          :cond (let [clauses (keep-indexed
                                vector
                                (partition 2 ast))]
@@ -314,3 +352,5 @@
 (comment
   Need to set clojure.core/load to be a function that loads the given resource.
   )
+
+;TODO: no good story for tracking fns written as #(inc %)
