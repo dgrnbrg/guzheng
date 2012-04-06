@@ -48,56 +48,134 @@
      (if x# ~@(nnext ast))))
 
 (def ^:dynamic *trace-id*)
+(def ^:dynamic *initial-registrations*)
+
+(defn register-branch
+  "Register a branch given a list of
+  branch ids"
+  [trace-atom node & bs]
+  (let [branch-map (zipmap bs (repeat 0))
+        ast (:body node)]
+    (swap! *trace-id* inc)
+    (swap! *initial-registrations*
+           conj
+           `(swap! ~trace-atom
+                   assoc
+                   ~(identity @*trace-id*) 
+                   (merge
+                     {:line ~(:line node) 
+                      :ast '~ast}
+                     ~branch-map)))))
+
+(defn trace-branch
+  "Takes a fragment of an ast branch
+  and a branch id and generates
+  a fragment that traces that branch."
+  [trace-atom branch id]
+  `(let [count# (get-in @~trace-atom
+                        [~(identity @*trace-id*) ~id])]
+     (println "hello from a teply wizard")
+     (swap! ~trace-atom
+            assoc-in
+            [~(identity @*trace-id*) ~id]
+            (inc count#))
+     ~branch))   
+
 (defn branchdetect-if
   "Takes an ast of an if and returns
   the transformed AST, having added its
   info to the *trace-atom* and adding
   a call to update its data from the
   *trace-atom* when the branch gets executed."
-  [a node]
-  (let [id @*trace-id*
-        ast (concat (list 'if) (:body node))]
-    (swap! *trace-id* inc)
-    `(do
-       (when-not (get @~a ~id)
-         (swap! ~a
-                assoc
-                ~id
-                {:line ~(:line node)
-                 :ast '~ast
-                 :lhs 0
-                 :rhs 0})) 
-       (if ~(second ast)
-         (let [lhs# (get-in @~a [~id :lhs])]
-           (swap! ~a
-                  assoc-in
-                  [~id :lhs]
-                  (inc lhs#))
-           ~(nth ast 2))   
-         (let [rhs# (get-in @~a [~id :rhs])]
-           (swap! ~a
-                  assoc-in
-                  [~id :rhs]
-                  (inc rhs#))
-           ~(nth ast 3))))))
+  [trace-atom node]
+  (register-branch trace-atom node :lhs :rhs)
+  (let [ast (:body node)]
+    `(if ~(first ast)
+       ~(trace-branch trace-atom
+                      (nth ast 1)
+                      :lhs)
+       ~(trace-branch trace-atom
+                      (nth ast 2)
+                      :rhs))))
 
+(defn branchdetect-cond
+  [trace-atom node]
+  (let [clauses (partition 2 (:body node))
+        branch-ids (range (count clauses))
+        conditions (map first clauses)
+        branches (map second clauses)]
+    (apply register-branch trace-atom node branch-ids) 
+    `(cond ~@(interleave
+               conditions
+               (map (partial trace-branch trace-atom)
+                    branches
+                    branch-ids)))))
+
+(defn branchdetect-condp
+  [trace-atom node]
+  (let [clauses (partition 2 2 [] (nthnext node 2))
+        final-clause (last clauses)
+        final-clause (if (= 1 (count final-clause))
+                       final-clause
+                       nil)
+        branch-ids (range (count clauses))
+        clauses (if final-clause
+                  (butlast clauses)
+                  clauses)
+        conditions (map first clauses)
+        branches (map second clauses)]
+  (apply register-branch trace-atom node branch-ids) 
+    (let [without-final
+          `(condp ~(first (:body node)) ~(second (:body node))
+             ~@(interleave
+                 conditions
+                 (map (partial trace-branch trace-atom)
+                      branches
+                      branch-ids)))]
+      (if final-clause
+        (concat without-final
+                (trace-branch trace-atom
+                              final-clause
+                              (last branch-ids)))
+        without-final))))
+
+
+(def main-trace-atom (atom {}))
+;TODO: access internal atom
 (defn trace-if-branches
   "a is an atom that'll contain the instrumentation
   data."
-  [a ast] 
-  (clojure.pprint/pprint (meta ast)) 
-  (binding [*trace-id* (atom 0)]
+  [ast] 
+  (binding [*trace-id* (atom 0)
+            *initial-registrations* (atom [])]
     (let [trace-atom (gensym)
           ast
           (prewalk
             (fn [node]
               (if (seqable? node)
-                (condp = (first node)
-                  'if {::trace true
-                       :type :if
-                       :line (-> node meta :line)
-                       :body (rest node)}
-                  node)
+                (let [line (-> node meta :line)]
+                  (condp = (first node)
+                    'if {::trace true
+                         :type :if
+                         :line line
+                         :body (rest node)}
+                    'cond {::trace true
+                           :type :cond
+                           :line line
+                           :body (rest node)} 
+                    'condp {::trace true
+                            :type :condp
+                            :line line
+                            :body (rest node)} 
+                    ;'fn {::trace true
+                    ;     :type :fn
+                    ;     :line line
+                    ;     :body (rest node)}
+                    ;'defn {::trace true
+                    ;       :type :defn
+                    ;       :line line
+                    ;       :body (rest node)}
+                    node))
                 node))
             ast)
           new-ast
@@ -105,18 +183,29 @@
             (fn [node]
               (if (::trace node)
                 (condp = (:type node)
-                  :if (branchdetect-if trace-atom
-                                       node)
-;                  'defn (concat node
-;                                `( (clojure.pprint/pprint
-;                                   [:trace ~trace-atom])))
-                  node)
+                  :if (branchdetect-if
+                        trace-atom node)
+                  :cond (branchdetect-cond
+                          trace-atom node)
+                  :condp (branchdetect-condp
+                           trace-atom node)
+                  ;:fn (branchdetect-fn
+                  ;      trace-atom node)
+                  ;:defn (branchdetect-fn
+                  ;        trace-atom node)
+                  (throw (RuntimeException.
+                           (str "Cannot trace "
+                                (:type node)))))
                 node))
             ast)
-          new-ast (concat new-ast (list trace-atom))]
-      (clojure.pprint/pprint new-ast)
-      `(let [~trace-atom (atom {})]
-         ~new-ast))))
+          new-ast (concat new-ast (list trace-atom))
+          new-ast `(let [~trace-atom main-trace-atom]
+                     ~new-ast
+                     ~@(identity @*initial-registrations*))]
+      ;(clojure.pprint/pprint *initial-registrations*)
+      (clojure.pprint/pprint new-ast) 
+      new-ast
+      )))
 
 (def a (atom {}))
 (instrument "
@@ -124,7 +213,7 @@
             (ns fred.rules)
            (defn hello-world [] (println \"hello world2\") (if true \"hi\" 22))
             "
-            (partial trace-if-branches a))
+             trace-if-branches)
 
 #_(alter-var-root #'clojure.core/load
                 (fn [old-load]

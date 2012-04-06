@@ -3,4 +3,4 @@
 (defn do-hello
   []
   (println "hello")
-  22)
+  (if true (println 22) "no soup"))
