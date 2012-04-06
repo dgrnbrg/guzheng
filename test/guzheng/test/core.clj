@@ -7,3 +7,12 @@
 
 (deftest test-sample2
   (is (= nil (do-hello))))
+
+(deftest cond-test
+  (is (= (do-cond "hi") 22))
+  (is (= (do-cond nil) "you win!")))
+
+(deftest condp-test
+  (is (= (do-condp "hi") 22))
+  (is (= (do-condp nil) "you win!")) 
+  (is (= (do-condp2 "hi") 22)))

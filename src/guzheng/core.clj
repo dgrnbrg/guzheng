@@ -74,7 +74,6 @@
   [trace-atom branch id]
   `(let [count# (get-in @~trace-atom
                         [~(identity @*trace-id*) ~id])]
-     (println "hello from a teply wizard")
      (swap! ~trace-atom
             assoc-in
             [~(identity @*trace-id*) ~id]
@@ -113,10 +112,10 @@
 
 (defn branchdetect-condp
   [trace-atom node]
-  (let [clauses (partition 2 2 [] (nthnext node 2))
+  (let [clauses (partition 2 2 [] (nthnext (:body node) 2))
         final-clause (last clauses)
         final-clause (if (= 1 (count final-clause))
-                       final-clause
+                       (first final-clause) 
                        nil)
         branch-ids (range (count clauses))
         clauses (if final-clause
@@ -124,6 +123,7 @@
                   clauses)
         conditions (map first clauses)
         branches (map second clauses)]
+    (clojure.pprint/pprint [:final final-clause])
   (apply register-branch trace-atom node branch-ids) 
     (let [without-final
           `(condp ~(first (:body node)) ~(second (:body node))
@@ -131,12 +131,13 @@
                  conditions
                  (map (partial trace-branch trace-atom)
                       branches
-                      branch-ids)))]
+                      branch-ids))
+             )]
       (if final-clause
         (concat without-final
-                (trace-branch trace-atom
-                              final-clause
-                              (last branch-ids)))
+                (list (trace-branch trace-atom
+                                    final-clause
+                                    (last branch-ids))))
         without-final))))
 
 
