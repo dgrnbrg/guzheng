@@ -8,3 +8,5 @@
 /.lein-deps-sum
 
 test/guzheng/test/.core.clj.swp
+
+src/guzheng/.sample.clj.swp
