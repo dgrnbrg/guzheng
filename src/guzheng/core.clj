@@ -1,5 +1,5 @@
 (ns guzheng.core
-  (:use [clojure [walk :only [postwalk]]]))
+  (:use [clojure [walk :only [postwalk walk prewalk]]]))
 
 (defn str->reader
   "Converts a string to a java.io.Reader"
@@ -24,7 +24,7 @@
   the instrumentation fn, which then returns the
   AST to be evaluated. Then the string is evaluated."
   [s f]
-  (let [s-wrapped (str "(do\n" s "\n)")
+  (let [s-wrapped (str "(do " s ")")
         reader (str->reader s-wrapped)
         ast-unmodified (read reader)
         ast-instrumented (f ast-unmodified)
@@ -54,16 +54,16 @@
   info to the *trace-atom* and adding
   a call to update its data from the
   *trace-atom* when the branch gets executed."
-  [a ast]
-  (let [id @*trace-id*]
+  [a node]
+  (let [id @*trace-id*
+        ast (concat (list 'if) (:body node))]
     (swap! *trace-id* inc)
-    (clojure.pprint/pprint [:ast :is ast])
     `(do
        (when-not (get @~a ~id)
          (swap! ~a
                 assoc
                 ~id
-                {:line ~(-> ast meta :line)
+                {:line ~(:line node)
                  :ast '~ast
                  :lhs 0
                  :rhs 0})) 
@@ -84,15 +84,29 @@
 (defn trace-if-branches
   "a is an atom that'll contain the instrumentation
   data."
-  [a ast]
+  [a ast] 
+  (clojure.pprint/pprint (meta ast)) 
   (binding [*trace-id* (atom 0)]
     (let [trace-atom (gensym)
-          new-ast
-          (postwalk 
+          ast
+          (prewalk
             (fn [node]
               (if (seqable? node)
                 (condp = (first node)
-                  'if (branchdetect-if trace-atom node)
+                  'if {::trace true
+                       :type :if
+                       :line (-> node meta :line)
+                       :body (rest node)}
+                  node)
+                node))
+            ast)
+          new-ast
+          (postwalk 
+            (fn [node]
+              (if (::trace node)
+                (condp = (:type node)
+                  :if (branchdetect-if trace-atom
+                                       node)
 ;                  'defn (concat node
 ;                                `( (clojure.pprint/pprint
 ;                                   [:trace ~trace-atom])))
@@ -108,7 +122,7 @@
 (instrument "
             ;go fred!
             (ns fred.rules)
-            (defn hello-world [] (println \"hello world2\")))
+           (defn hello-world [] (println \"hello world2\") (if true \"hi\" 22))
             "
             (partial trace-if-branches a))
 
