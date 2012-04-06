@@ -99,8 +99,7 @@
                   node)
                 node))
             ast)
-          new-ast (concat new-ast `((defn ~'trace-result [] 
-                                      [:trace ~trace-atom])))]
+          new-ast (concat new-ast (list trace-atom))]
       (clojure.pprint/pprint new-ast)
       `(let [~trace-atom (atom {})]
          ~new-ast))))
