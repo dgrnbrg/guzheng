@@ -1,5 +1,6 @@
 (ns guzheng.core
-  (:use [clojure [walk :only [postwalk walk prewalk]]]))
+  (:use [clojure [walk :only [postwalk walk prewalk]]])
+  (:require [clojure pprint test]))
 
 (defn str->reader
   "Converts a string to a java.io.Reader"
