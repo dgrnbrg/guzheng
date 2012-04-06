@@ -148,7 +148,7 @@
   [ast] 
   (binding [*trace-id* (atom 0)
             *initial-registrations* (atom [])]
-    (let [trace-atom (gensym)
+    (let [trace-atom 'guzheng.core/main-trace-atom
           ast
           (prewalk
             (fn [node]
@@ -198,22 +198,13 @@
                                 (:type node)))))
                 node))
             ast)
-          new-ast (concat new-ast (list trace-atom))
-          new-ast `(let [~trace-atom main-trace-atom]
-                     ~new-ast
-                     ~@(identity @*initial-registrations*))]
+          new-ast (concat
+                     new-ast
+                     @*initial-registrations*)]
       ;(clojure.pprint/pprint *initial-registrations*)
       (clojure.pprint/pprint new-ast) 
       new-ast
       )))
-
-(def a (atom {}))
-(instrument "
-            ;go fred!
-            (ns fred.rules)
-           (defn hello-world [] (println \"hello world2\") (if true \"hi\" 22))
-            "
-             trace-if-branches)
 
 #_(alter-var-root #'clojure.core/load
                 (fn [old-load]
@@ -262,15 +253,11 @@
 
 ;following is sample usage
 #_(guzheng.core/run-test-instrumented 
-         (partial clojure.walk/postwalk
-                  (fn [node]
-                    (if (and (seqable? node)
-                             (= (first node) 'println))
-                      (concat `(do (println (str "calling println with args: " '~(rest node))))
-                              node)
-                      node)))
+         trace-if-branches
          ['guzheng.sample]
          'guzheng.test.core)
+;check the contents of guzheng.core/main-trace-atom
+;
 (comment
   Need to set clojure.core/load to be a function that loads the given resource.
   )
