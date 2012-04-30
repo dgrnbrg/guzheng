@@ -1,5 +1,6 @@
 (ns guzheng.core
   (:use [clojure [walk :only [postwalk walk prewalk]]])
+  (:use [bultitude.core :only [path-for]])
   (:require [clojure pprint test]))
 
 (defn str->reader
@@ -106,7 +107,7 @@
 (defn index-of-first
   [pred s]
   (loop [i 0 s (seq s)]
-    (if (pred (first s))
+    (if (or (empty? s) (pred (first s)))
       i
       (recur (inc i) (next s)))))
 
@@ -281,6 +282,25 @@
                                              node)))) 
                               )))))
                     )))
+
+(defn instrument-ns
+  "Takes an ns and a form for the instrumnetation
+  function and returns a form to be evaluated that
+  will have that ns be instrumented."
+  [ns f]
+  (let [path (path-for ns)]
+    (println (str "instrumenting " path))
+    (-> clojure.lang.Compiler
+      .getClassLoader
+      (.getResourceAsStream path)
+      java.io.InputStreamReader.
+      slurp
+      (instrument f))))
+
+(defn instrument-nses
+  [f nses]
+  (doseq [ns nses]
+    (instrument-ns ns f)))
 
 (defn run-test-instrumented
   [f instrumented-nses & nses]
