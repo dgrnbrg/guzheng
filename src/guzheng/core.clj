@@ -39,8 +39,6 @@
   [f ast]
   (postwalk #(if (and (seqable? %) (= (first %) 'if)) (f %) %) ast))
 
-;(require 'clojure.pprint)
-
 (defn print-trace-if
   [ast]
   `(let [x# ~(second ast)]
@@ -245,7 +243,7 @@
                      new-ast
                      @*initial-registrations*)]
       ;(clojure.pprint/pprint *initial-registrations*)
-      (clojure.pprint/pprint new-ast) 
+      ;(clojure.pprint/pprint new-ast) 
       new-ast
       )))
 
