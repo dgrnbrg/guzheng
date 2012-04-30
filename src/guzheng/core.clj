@@ -300,17 +300,6 @@
   (doseq [ns nses]
     (instrument-ns ns f)))
 
-(defn run-test-instrumented
-  [f instrumented-nses & nses]
-  (doseq [ns instrumented-nses]
-    (-> clojure.lang.Compiler
-      .getClassLoader
-      (.getResourceAsStream (str (.replace (name ns) "." "/") ".clj"))
-      java.io.InputStreamReader.
-      slurp
-      (instrument f)))
-    (apply clojure.test/run-tests nses)) 
-
 (defn report-missing-coverage
   []
   (let [results (vals @main-trace-atom)]
