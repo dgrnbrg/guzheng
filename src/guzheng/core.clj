@@ -178,6 +178,52 @@
                                     (last branch-ids))))
         without-final))))
 
+(defn walk-trace-branches
+  [node trace-atom]
+  (if-not (seqable? node)
+    node
+    (let [line (-> node meta :line)
+          analyzed (condp = (first node)
+                     'if {::trace true
+                          :type :if
+                          :line line
+                          :body (if (= 3 (count node))
+                                  (conj (rest node) nil)
+                                  (rest node))}  
+                     'cond {::trace true
+                            :type :cond
+                            :line line
+                            :body (rest node)} 
+                     'condp {::trace true
+                             :type :condp
+                             :line line
+                             :body (rest node)} 
+                     'fn {::trace true
+                          :type :fn
+                          :line line
+                          :body (rest node)}
+                     'defn {::trace true
+                            :type :defn
+                            :line line
+                            :body (rest node)})
+          ast-nested-walk (map walk-trace-branches node)
+          result (if analyzed
+                   (condp = (:type analyzed)
+                     :if (branchdetect-if
+                           trace-atom analyzed)
+                     :cond (branchdetect-cond
+                             trace-atom analyzed)
+                     :condp (branchdetect-condp
+                              trace-atom analyzed)
+                     :fn (branchdetect-fn
+                           trace-atom analyzed)
+                     :defn (branchdetect-defn
+                             trace-atom analyzed)
+                     (throw (RuntimeException.
+                              (str "Cannot trace "
+                                   (:type analyzed)))))
+                   node)]
+      result)))
 
 (def main-trace-atom (atom {}))
 ;TODO: access internal atom
@@ -188,62 +234,14 @@
   (binding [*trace-id* (atom 0)
             *initial-registrations* (atom [])]
     (let [trace-atom 'guzheng.core/main-trace-atom
-          ast
-          (prewalk
-            (fn [node]
-              (if (seqable? node)
-                (let [line (-> node meta :line)]
-                  (condp = (first node)
-                    'if {::trace true
-                         :type :if
-                         :line line
-                         :body (if (= 3 (count node))
-                                 (conj (rest node) nil)
-                                 (rest node))}  
-                    'cond {::trace true
-                           :type :cond
-                           :line line
-                           :body (rest node)} 
-                    'condp {::trace true
-                            :type :condp
-                            :line line
-                            :body (rest node)} 
-                    'fn {::trace true
-                         :type :fn
-                         :line line
-                         :body (rest node)}
-                    'defn {::trace true
-                           :type :defn
-                           :line line
-                           :body (rest node)}
-                    node))
-                node))
-            ast)
-          new-ast
-          (postwalk 
-            (fn [node]
-              (if (::trace node)
-                (condp = (:type node)
-                  :if (branchdetect-if
-                        trace-atom node)
-                  :cond (branchdetect-cond
-                          trace-atom node)
-                  :condp (branchdetect-condp
-                           trace-atom node)
-                  :fn (branchdetect-fn
-                        trace-atom node)
-                  :defn (branchdetect-defn
-                          trace-atom node)
-                  (throw (RuntimeException.
-                           (str "Cannot trace "
-                                (:type node)))))
-                node))
-            ast)
+          transformed-ast (walk-trace-branches ast trace-atom)
           new-ast (concat
-                     new-ast
+                     transformed-ast
                      @*initial-registrations*)]
       ;(clojure.pprint/pprint *initial-registrations*)
       ;(clojure.pprint/pprint new-ast) 
+      (println "using walk-trace-branches")
+      (clojure.pprint/pprint "using walk-trace-branches")
       new-ast
       )))
 
@@ -288,6 +286,8 @@
   [ns f]
   (let [path (path-for ns)]
     (println (str "instrumenting " path))
+    (println "using walk-trace-branches")
+    (flush)
     (-> clojure.lang.Compiler
       .getClassLoader
       (.getResourceAsStream path)
