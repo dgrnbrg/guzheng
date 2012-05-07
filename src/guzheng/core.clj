@@ -1,5 +1,4 @@
 (ns guzheng.core
-  (:use [clojure [walk :only [postwalk walk prewalk]]])
   (:use [bultitude.core :only [path-for]])
   (:require [clojure pprint test]))
 
@@ -14,12 +13,7 @@
   "Returns true if (seq x) will succeed, false otherwise."
   [x]
   (or (seq? x)
-      (instance? clojure.lang.Seqable x)
-      (nil? x)
-      (instance? Iterable x)
-      (-> x .getClass .isArray)
-      (string? x)
-      (instance? java.util.Map x)))
+      ))
 
 (defn instrument
   "Takes a string, parses it and passes it to
@@ -35,7 +29,7 @@
     (in-ns old-ns)
     result))
 
-(defn trace-ifs
+#_(defn trace-ifs
   [f ast]
   (postwalk #(if (and (seqable? %) (= (first %) 'if)) (f %) %) ast))
 
@@ -49,6 +43,8 @@
 
 (def ^:dynamic *trace-id*)
 (def ^:dynamic *initial-registrations*)
+(def ^:dynamic *current-branch* nil)
+(def ^:dynamic *parent-branch* nil)
 
 (defn register-branch
   "Register a branch given a list of
@@ -56,31 +52,30 @@
   [trace-atom node & bs]
   (let [branch-map (zipmap bs (repeat 0))
         ast (:body node)]
-    (swap! *trace-id* inc)
     (swap! *initial-registrations*
            conj
            `(swap! ~trace-atom
                    assoc
-                   ~(identity @*trace-id*) 
+                   ~(identity *current-branch*) 
                    (merge
                      {:line ~(:line node) 
                       :type ~(:type node)
                       :ns (ns-name *ns*)
-                      :ast '~ast}
+                      :ast '~ast
+                      :parent ~*parent-branch*}
                      ~branch-map)))
-    @*trace-id*))
+    *current-branch*))
 
 (defn trace-branch
   "Takes a fragment of an ast branch
   and a branch id and generates
   a fragment that traces that branch."
   [trace-atom branch id branch-id]
-  `(let [count# (get-in @~trace-atom
-                        [~id ~branch-id])]
+  `(do 
      (swap! ~trace-atom
-            assoc-in
+            update-in
             [~id ~branch-id]
-            (inc count#))
+            inc)
      ~branch))   
 
 (defn branchdetect-if
@@ -182,7 +177,12 @@
   [node trace-atom]
   (if-not (seqable? node)
     node
-    (let [line (-> node meta :line)
+    (binding [*parent-branch* *current-branch*
+              *current-branch* (swap! *trace-id* inc)]
+     (let [line (-> node meta :line)
+          node (if (seqable? node)
+                 (doall (map #(walk-trace-branches % trace-atom) node))
+                 node)
           analyzed (condp = (first node)
                      'if {::trace true
                           :type :if
@@ -205,8 +205,8 @@
                      'defn {::trace true
                             :type :defn
                             :line line
-                            :body (rest node)})
-          ast-nested-walk (map walk-trace-branches node)
+                            :body (rest node)}
+                     nil)
           result (if analyzed
                    (condp = (:type analyzed)
                      :if (branchdetect-if
@@ -223,7 +223,7 @@
                               (str "Cannot trace "
                                    (:type analyzed)))))
                    node)]
-      result)))
+      result))))
 
 (def main-trace-atom (atom {}))
 ;TODO: access internal atom
@@ -240,8 +240,6 @@
                      @*initial-registrations*)]
       ;(clojure.pprint/pprint *initial-registrations*)
       ;(clojure.pprint/pprint new-ast) 
-      (println "using walk-trace-branches")
-      (clojure.pprint/pprint "using walk-trace-branches")
       new-ast
       )))
 
@@ -286,7 +284,6 @@
   [ns f]
   (let [path (path-for ns)]
     (println (str "instrumenting " path))
-    (println "using walk-trace-branches")
     (flush)
     (-> clojure.lang.Compiler
       .getClassLoader
@@ -302,14 +299,17 @@
 
 (defn report-missing-coverage
   []
-  (let [results (vals @main-trace-atom)]
-    (doseq [{:keys [type ast line ns] :as data} results]
+  (let [results @main-trace-atom
+        errors-so-far (atom #{})]
+    (doseq [[id {:keys [type ast line ns parent] :as data}] results]
       (letfn [(report [msg stmt]
-                (println (str "in ns " ns ": "
-                              msg
-                              " is not covered in \""
-                              stmt
-                              "\" on line " line)))] 
+                (when-not (contains? @errors-so-far parent)
+                  (println (str "in ns " ns ": "
+                                msg
+                                " is not covered in \""
+                                stmt
+                                "\" on line " line)))
+                (swap! errors-so-far conj id))] 
        (condp = type
         :if (do
               (when (zero? (:lhs data))
