@@ -56,9 +56,9 @@
            conj
            `(swap! ~trace-atom
                    assoc
-                   ~(identity *current-branch*) 
+                   ~(identity *current-branch*)
                    (merge
-                     {:line ~(:line node) 
+                     {:line ~(:line node)
                       :type ~(:type node)
                       :ns (ns-name *ns*)
                       :ast '~ast
@@ -71,12 +71,12 @@
   and a branch id and generates
   a fragment that traces that branch."
   [trace-atom branch id branch-id]
-  `(do 
+  `(do
      (swap! ~trace-atom
             update-in
             [~id ~branch-id]
             inc)
-     ~branch))   
+     ~branch))
 
 (defn branchdetect-if
   "Takes an ast of an if and returns
@@ -107,24 +107,18 @@
 (defn branchdetect-defn
   [trace-atom node]
   (let [ast (:body node)
-        [name-args body] (split-at (inc (index-of-first vector? ast)) ast)
+        [fn-name fn-args-body] (split-at 1 ast)
+        fn-args-body (if (= (index-of-first vector? ast) 1) (list fn-args-body) fn-args-body)
         id (register-branch trace-atom node :main)]
-    `(defn ~@name-args
-       ~(trace-branch trace-atom
-                       `(do ~@body)
-                       id
-                       :main))))
+  `(defn ~@fn-name ~@(map #(list (first %) (trace-branch trace-atom `(do ~@(rest %)) id :main)) fn-args-body))))
 
 (defn branchdetect-fn
   [trace-atom node]
   (let [ast (:body node)
-        [name-args body] (split-at (inc (index-of-first vector? ast)) ast)
+        [fn-name fn-args-body] (split-at 1 ast)
+        fn-args-body (if (= (index-of-first vector? ast) 1) (list fn-args-body) fn-args-body)
         id (register-branch trace-atom node :main)]
-    `(fn ~@name-args
-       ~(trace-branch trace-atom
-                       `(do ~@body)
-                       id
-                       :main))))
+  `(fn ~@fn-name ~@(map #(list (first %) (trace-branch trace-atom `(do ~@(rest %)) id :main)) fn-args-body))))
 
 (defn branchdetect-cond
   [trace-atom node]
@@ -146,7 +140,7 @@
   (let [clauses (partition 2 2 [] (nthnext (:body node) 2))
         final-clause (last clauses)
         final-clause (if (= 1 (count final-clause))
-                       (first final-clause) 
+                       (first final-clause)
                        nil)
         branch-ids (range (count clauses))
         clauses (if final-clause
@@ -189,15 +183,15 @@
                           :line line
                           :body (if (= 3 (count node))
                                   (conj (rest node) nil)
-                                  (rest node))}  
+                                  (rest node))}
                      'cond {::trace true
                             :type :cond
                             :line line
-                            :body (rest node)} 
+                            :body (rest node)}
                      'condp {::trace true
                              :type :condp
                              :line line
-                             :body (rest node)} 
+                             :body (rest node)}
                      'fn {::trace true
                           :type :fn
                           :line line
@@ -230,7 +224,7 @@
 (defn trace-if-branches
   "a is an atom that'll contain the instrumentation
   data."
-  [ast] 
+  [ast]
   (binding [*trace-id* (atom 0)
             *initial-registrations* (atom [])]
     (let [trace-atom 'guzheng.core/main-trace-atom
@@ -239,7 +233,7 @@
                      transformed-ast
                      @*initial-registrations*)]
       ;(clojure.pprint/pprint *initial-registrations*)
-      ;(clojure.pprint/pprint new-ast) 
+      ;(clojure.pprint/pprint new-ast)
       new-ast
       )))
 
@@ -273,7 +267,7 @@
                                                     (= (first node) 'println))
                                              (concat '(do (println "calling println"))
                                                      node)
-                                             node)))) 
+                                             node))))
                               )))))
                     )))
 
@@ -309,7 +303,7 @@
                                 " is not covered in \""
                                 stmt
                                 "\" on line " line)))
-                (swap! errors-so-far conj id))] 
+                (swap! errors-so-far conj id))]
        (condp = type
         :if (do
               (when (zero? (:lhs data))
@@ -339,7 +333,7 @@
                                  dec
                                  (/ 2))
                                (vector "last clause"
-                                       (last ast))] 
+                                       (last ast))]
                               nil)
                       clauses (if-not (nil? final)
                                 (conj clauses final)
@@ -350,7 +344,7 @@
          nil)))))
 
 ;following is sample usage
-#_(guzheng.core/run-test-instrumented 
+#_(guzheng.core/run-test-instrumented
          trace-if-branches
          ['guzheng.sample]
          'guzheng.test.core)
@@ -361,3 +355,8 @@
   )
 
 ;TODO: no good story for tracking fns written as #(inc %)
+
+; for run use "lein run -m guzheng.core"
+(defn -main []
+  (instrument-nses trace-if-branches ["guzheng.sample" "guzheng.test.core"])
+  (report-missing-coverage))

@@ -27,4 +27,12 @@
 
 (defn uncalled-for [] (if true (println "You should never see this") ))
 
+(defn defn-multi-arity
+  ([] "hi")
+  ([x] "blah"))
+
 (def foo (fn [x] (inc x)))
+
+(def fn-multi-arity (fn
+  ([] "hi")
+  ([x] "blah")))

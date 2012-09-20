@@ -16,3 +16,7 @@
   (is (= (do-condp "hi") 22))
   (is (= (do-condp nil) "you win!")) 
   (is (= (do-condp2 "hi") 22)))
+
+(deftest defn-multi-arity-test
+  (is (= (defn-multi-arity) "hi")))
+
