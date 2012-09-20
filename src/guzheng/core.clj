@@ -104,28 +104,28 @@
       i
       (recur (inc i) (next s)))))
 
-(defn branchdetect-defn
-  [trace-atom node]
-  (let [ast (:body node)
-        [name-args body] (split-at (inc (index-of-first vector? ast)) ast)
-        id (register-branch trace-atom node :main)]
-    `(defn ~@name-args
-       ~(trace-branch trace-atom
-                       `(do ~@body)
-                       id
-                       :main))))
+(defn extract-fn-arities
+  "Takes a fn body and extracts the single or multiple arity form."
+  [fn-body]
+  (let [[name+metadata bodies] (split-with #(not (or (seq? %)
+                                                     (vector? %))) fn-body)
+        fixup-single-arity (if (vector? (first bodies))
+                             (list bodies)
+                             bodies)]
+    [name+metadata fixup-single-arity]))
 
 (defn branchdetect-fn
-  [trace-atom node]
+  [trace-atom fn-decl node]
   (let [ast (:body node)
-        [name-args body] (split-at (inc (index-of-first vector? ast)) ast)
-        id (register-branch trace-atom node :main)]
-    `(fn ~@name-args
-       ~(trace-branch trace-atom
-                       `(do ~@body)
-                       id
-                       :main))))
-
+        [fn-name+meta fn-bodies] (extract-fn-arities ast) 
+        branch-ids (map (comp count first) fn-bodies) 
+        id (apply register-branch trace-atom node branch-ids)]
+    (cons fn-decl (concat fn-name+meta
+                        (map (fn [body branch-id]
+                               (list (first body) ;arg list
+                                     (trace-branch trace-atom (cons `do (rest body))
+                                                   id branch-id)))
+                             fn-bodies branch-ids)))))
 (defn branchdetect-cond
   [trace-atom node]
   (let [clauses (partition 2 (:body node))
@@ -216,9 +216,9 @@
                      :condp (branchdetect-condp
                               trace-atom analyzed)
                      :fn (branchdetect-fn
-                           trace-atom analyzed)
-                     :defn (branchdetect-defn
-                             trace-atom analyzed)
+                           trace-atom `fn analyzed)
+                     :defn (branchdetect-fn
+                             trace-atom `defn analyzed)
                      (throw (RuntimeException.
                               (str "Cannot trace "
                                    (:type analyzed)))))
@@ -226,18 +226,21 @@
       result))))
 
 (def main-trace-atom (atom {}))
-;TODO: access internal atom
 (defn trace-if-branches
-  "a is an atom that'll contain the instrumentation
-  data."
-  [ast] 
+  "Instruments the ast to trace all conditional branches (cond, condp, fn, defn, and if).
+  
+  If passed the setting :reload, will not include the code that resets the counters.
+  "
+  [ast & settings] 
   (binding [*trace-id* (atom 0)
             *initial-registrations* (atom [])]
     (let [trace-atom 'guzheng.core/main-trace-atom
           transformed-ast (walk-trace-branches ast trace-atom)
-          new-ast (concat
-                     transformed-ast
-                     @*initial-registrations*)]
+          new-ast (if (some #{:reload} settings)
+                    transformed-ast
+                    (concat
+                      transformed-ast
+                      @*initial-registrations*))]
       ;(clojure.pprint/pprint *initial-registrations*)
       ;(clojure.pprint/pprint new-ast) 
       new-ast
@@ -309,45 +312,47 @@
                                 " is not covered in \""
                                 stmt
                                 "\" on line " line)))
-                (swap! errors-so-far conj id))] 
-       (condp = type
-        :if (do
-              (when (zero? (:lhs data))
-                (report "true branch" "if"))
-              (when (zero? (:rhs data))
-                (report "false branch" "if")))
-         :defn (do
-               (when (zero? (:main data))
-                 (report (first ast) "defn")))
-         :fn (do
-               (when (zero? (:main data))
-                 (report (if (string? (first ast))
-                           (first ast)
-                           "body") "fn")))
-         :cond (let [clauses (keep-indexed
-                               vector
-                               (partition 2 ast))]
-                 (doseq [[id clause] clauses]
-                   (when (zero? (get data id))
-                     (report (first clause) "cond"))))
-         :condp (let [ast (drop 2 ast)
-                      clauses (keep-indexed
-                               vector
-                               (partition 2 ast))
-                      final (if (odd? (count ast))
-                              [(-> (count ast)
-                                 dec
-                                 (/ 2))
-                               (vector "last clause"
-                                       (last ast))] 
-                              nil)
-                      clauses (if-not (nil? final)
-                                (conj clauses final)
-                                clauses)]
-                 (doseq [[id clause] clauses]
-                   (when (zero? (get data id))
-                     (report (first clause) "condp"))))
-         nil)))))
+                (swap! errors-so-far conj id)) 
+              (report-fn [fn-decl]
+                (let [[_ bodies] (extract-fn-arities ast)
+                      arities (map (comp (juxt identity count)
+                                         first) bodies)]
+                  (doseq [[args arity] arities]
+                    (when (zero? (get data arity))
+                      (report (str "arity " args)
+                              (str fn-decl \space (first ast)))))))] 
+        (condp = type
+          :if (do
+                (when (zero? (:lhs data))
+                  (report "true branch" "if"))
+                (when (zero? (:rhs data))
+                  (report "false branch" "if")))
+          :defn (report-fn "defn") 
+          :fn (report-fn "fn")
+          :cond (let [clauses (keep-indexed
+                                vector
+                                (partition 2 ast))]
+                  (doseq [[id clause] clauses]
+                    (when (zero? (get data id))
+                      (report (first clause) "cond"))))
+          :condp (let [ast (drop 2 ast)
+                       clauses (keep-indexed
+                                 vector
+                                 (partition 2 ast))
+                       final (if (odd? (count ast))
+                               [(-> (count ast)
+                                  dec
+                                  (/ 2))
+                                (vector "last clause"
+                                        (last ast))] 
+                               nil)
+                       clauses (if-not (nil? final)
+                                 (conj clauses final)
+                                 clauses)]
+                   (doseq [[id clause] clauses]
+                     (when (zero? (get data id))
+                       (report (first clause) "condp"))))
+          nil)))))
 
 ;following is sample usage
 #_(guzheng.core/run-test-instrumented 
