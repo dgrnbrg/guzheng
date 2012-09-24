@@ -29,18 +29,6 @@
     (in-ns old-ns)
     result))
 
-#_(defn trace-ifs
-  [f ast]
-  (postwalk #(if (and (seqable? %) (= (first %) 'if)) (f %) %) ast))
-
-(defn print-trace-if
-  [ast]
-  `(let [x# ~(second ast)]
-     (println (str "if statement on line "
-                   ~(-> ast meta :line)
-                   " is " x#))
-     (if x# ~@(nnext ast))))
-
 (def ^:dynamic *trace-id*)
 (def ^:dynamic *initial-registrations*)
 (def ^:dynamic *current-branch* nil)
@@ -173,6 +161,69 @@
                                     (last branch-ids))))
         without-final))))
 
+(defmulti analyze-node
+  "Takes a node and returns either the
+  unmodified node or the node having been instrumented."
+  (fn [node]
+    (try
+      (-> node first name keyword)
+      (catch Exception _
+        :terminal))))
+
+(defmethod analyze-node :terminal
+  [node]
+  node)
+
+(defmethod analyze-node :if
+  [node trace-atom]
+  (let [line (-> node meta :line)]
+    (branchdetect-if
+      trace-atom
+      {:type :if
+       :line line
+       :body (if (= 3 (count node))
+               (conj (rest node) nil)
+               (rest node))})))
+
+(defmethod analyze-node :cond
+  [node trace-atom]
+  (let [line (-> node meta :line)]
+    (branchdetect-cond 
+      trace-atom
+      {:type :cond 
+       :line line
+       :body (rest node)})))
+
+(defmethod analyze-node :condp
+  [node trace-atom]
+  (let [line (-> node meta :line)]
+    (branchdetect-condp
+      trace-atom
+      {:type :condp
+       :line line
+       :body (rest node)})))
+
+
+(defmethod analyze-node :defn
+  [node trace-atom]
+  (let [line (-> node meta :line)]
+    (branchdetect-fn 
+      trace-atom
+      `defn
+      {:type :fn 
+       :line line
+       :body (rest node)})))
+
+(defmethod analyze-node :fn
+  [node trace-atom]
+  (let [line (-> node meta :line)]
+    (branchdetect-fn 
+      trace-atom
+      `fn
+      {:type :fn 
+       :line line
+       :body (rest node)})))
+
 (defn walk-trace-branches
   [node trace-atom]
   (if-not (seqable? node)
@@ -182,48 +233,8 @@
      (let [line (-> node meta :line)
           node (if (seqable? node)
                  (doall (map #(walk-trace-branches % trace-atom) node))
-                 node)
-          analyzed (condp = (first node)
-                     'if {::trace true
-                          :type :if
-                          :line line
-                          :body (if (= 3 (count node))
-                                  (conj (rest node) nil)
-                                  (rest node))}  
-                     'cond {::trace true
-                            :type :cond
-                            :line line
-                            :body (rest node)} 
-                     'condp {::trace true
-                             :type :condp
-                             :line line
-                             :body (rest node)} 
-                     'fn {::trace true
-                          :type :fn
-                          :line line
-                          :body (rest node)}
-                     'defn {::trace true
-                            :type :defn
-                            :line line
-                            :body (rest node)}
-                     nil)
-          result (if analyzed
-                   (condp = (:type analyzed)
-                     :if (branchdetect-if
-                           trace-atom analyzed)
-                     :cond (branchdetect-cond
-                             trace-atom analyzed)
-                     :condp (branchdetect-condp
-                              trace-atom analyzed)
-                     :fn (branchdetect-fn
-                           trace-atom `fn analyzed)
-                     :defn (branchdetect-fn
-                             trace-atom `defn analyzed)
-                     (throw (RuntimeException.
-                              (str "Cannot trace "
-                                   (:type analyzed)))))
-                   node)]
-      result))))
+                 node)]
+      (analyze-node node trace-atom)))))
 
 (def main-trace-atom (atom {}))
 (defn trace-if-branches
@@ -353,16 +364,3 @@
                      (when (zero? (get data id))
                        (report (first clause) "condp"))))
           nil)))))
-
-;following is sample usage
-#_(guzheng.core/run-test-instrumented 
-         trace-if-branches
-         ['guzheng.sample]
-         'guzheng.test.core)
-;check the contents of guzheng.core/main-trace-atom
-;
-(comment
-  Need to set clojure.core/load to be a function that loads the given resource.
-  )
-
-;TODO: no good story for tracking fns written as #(inc %)
