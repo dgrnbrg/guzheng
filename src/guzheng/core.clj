@@ -164,65 +164,64 @@
 (defmulti analyze-node
   "Takes a node and returns either the
   unmodified node or the node having been instrumented."
-  (fn [node]
+  (fn [node line trace-atom]
     (try
       (-> node first name keyword)
       (catch Exception _
         :terminal))))
 
+(defmethod analyze-node :default
+  [node line trace-atom]
+  node)
+
 (defmethod analyze-node :terminal
-  [node]
+  [node line trace-atom]
   node)
 
 (defmethod analyze-node :if
-  [node trace-atom]
-  (let [line (-> node meta :line)]
-    (branchdetect-if
-      trace-atom
-      {:type :if
-       :line line
-       :body (if (= 3 (count node))
-               (conj (rest node) nil)
-               (rest node))})))
+  [node line trace-atom]
+  (branchdetect-if
+    trace-atom
+    {:type :if
+     :line line
+     :body (if (= 3 (count node))
+             (conj (rest node) nil)
+             (rest node))}))
 
 (defmethod analyze-node :cond
-  [node trace-atom]
-  (let [line (-> node meta :line)]
-    (branchdetect-cond 
-      trace-atom
-      {:type :cond 
-       :line line
-       :body (rest node)})))
+  [node line trace-atom]
+  (branchdetect-cond 
+    trace-atom
+    {:type :cond 
+     :line line
+     :body (rest node)}))
 
 (defmethod analyze-node :condp
-  [node trace-atom]
-  (let [line (-> node meta :line)]
-    (branchdetect-condp
-      trace-atom
-      {:type :condp
-       :line line
-       :body (rest node)})))
+  [node line trace-atom]
+  (branchdetect-condp
+    trace-atom
+    {:type :condp
+     :line line
+     :body (rest node)}))
 
 
 (defmethod analyze-node :defn
-  [node trace-atom]
-  (let [line (-> node meta :line)]
-    (branchdetect-fn 
-      trace-atom
-      `defn
-      {:type :fn 
-       :line line
-       :body (rest node)})))
+  [node line trace-atom]
+  (branchdetect-fn 
+    trace-atom
+    `defn
+    {:type :defn 
+     :line line
+     :body (rest node)}))
 
 (defmethod analyze-node :fn
-  [node trace-atom]
-  (let [line (-> node meta :line)]
-    (branchdetect-fn 
-      trace-atom
-      `fn
-      {:type :fn 
-       :line line
-       :body (rest node)})))
+  [node line trace-atom]
+  (branchdetect-fn 
+    trace-atom
+    `fn
+    {:type :fn 
+     :line line
+     :body (rest node)}))
 
 (defn walk-trace-branches
   [node trace-atom]
@@ -234,7 +233,7 @@
           node (if (seqable? node)
                  (doall (map #(walk-trace-branches % trace-atom) node))
                  node)]
-      (analyze-node node trace-atom)))))
+      (analyze-node node line trace-atom)))))
 
 (def main-trace-atom (atom {}))
 (defn trace-if-branches
@@ -256,40 +255,6 @@
       ;(clojure.pprint/pprint new-ast) 
       new-ast
       )))
-
-#_(alter-var-root #'clojure.core/load
-                (fn [old-load]
-                  (fn custom-load
-                    [& paths]
-                    (doseq [^String path paths]
-                      (let [^String path (if (.startsWith path "/")
-                                             path
-                                             (str (#'clojure.core/root-directory (ns-name *ns*))
-                                                  \/ path))
-                            core (create-ns 'clojure.core)]
-                        (when #'clojure.core/*loading-verbosely*
-                          (printf "(clojure.core/load \"%s\")\n" path)
-                          (flush))
-                        (#'clojure.core/check-cyclic-dependency path)
-                        (when-not (= path (first (resolve core '*pending-paths*)))
-                          (binding [clojure.core/*pending-paths*
-                                    (conj (resolve core '*pending-paths*) path)]
-                            (-> (clojure.lang.RT/resourceAsStream
-                                    (clojure.lang.RT/baseLoader)
-                                    (.substring path 1))
-                              java.io.InputStreamReader.
-                              java.io.StringReader.
-                              .toString
-                              (instrument
-                                (partial postwalk
-                                         (fn [node]
-                                           (if (and (seqable? node)
-                                                    (= (first node) 'println))
-                                             (concat '(do (println "calling println"))
-                                                     node)
-                                             node)))) 
-                              )))))
-                    )))
 
 (defn instrument-ns
   "Takes an ns and a form for the instrumnetation

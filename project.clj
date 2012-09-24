@@ -1,4 +1,4 @@
-(defproject guzheng/guzheng "1.2.1"
+(defproject guzheng/guzheng "1.2.2"
   :description "guzheng: an instrumentation and code coverage library for Clojure"
   :dependencies [[org.clojure/clojure "1.3.0"]
                  [bultitude "0.1.5"]]
