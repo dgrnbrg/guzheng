@@ -33,6 +33,8 @@
 (def ^:dynamic *initial-registrations*)
 (def ^:dynamic *current-branch* nil)
 (def ^:dynamic *parent-branch* nil)
+(def ^:dynamic *initialize-main-traces* false)
+(def main-trace-atom (atom {}))
 
 (defn register-branch
   "Register a branch given a list of
@@ -40,18 +42,17 @@
   [trace-atom node & bs]
   (let [branch-map (zipmap bs (repeat 0))
         ast (:body node)]
-    (swap! *initial-registrations*
-           conj
-           `(swap! ~trace-atom
-                   assoc
-                   ~(identity *current-branch*) 
-                   (merge
-                     {:line ~(:line node) 
-                      :type ~(:type node)
-                      :ns (ns-name *ns*)
-                      :ast '~ast
-                      :parent ~*parent-branch*}
-                     ~branch-map)))
+    (when *initialize-main-traces*
+      (swap! main-trace-atom
+             assoc
+             *current-branch* 
+             (merge
+               {:line (:line node) 
+                :type (:type node)
+                :ns (ns-name *ns*)
+                :ast ast
+                :parent *parent-branch*}
+               branch-map))) 
     *current-branch*))
 
 (defn trace-branch
@@ -230,12 +231,15 @@
     (binding [*parent-branch* *current-branch*
               *current-branch* (swap! *trace-id* inc)]
      (let [line (-> node meta :line)
-          node (if (seqable? node)
+          node (if (and (seqable? node)
+                        ;TODO: determine if the following line is needed
+                        ;for tracing macros
+                        #_(not= 'quote (first node))
+                        )
                  (doall (map #(walk-trace-branches % trace-atom) node))
                  node)]
       (analyze-node node line trace-atom)))))
 
-(def main-trace-atom (atom {}))
 (defn trace-if-branches
   "Instruments the ast to trace all conditional branches (cond, condp, fn, defn, and if).
   
@@ -245,12 +249,10 @@
   (binding [*trace-id* (atom 0)
             *initial-registrations* (atom [])]
     (let [trace-atom 'guzheng.core/main-trace-atom
-          transformed-ast (walk-trace-branches ast trace-atom)
-          new-ast (if (some #{:reload} settings)
-                    transformed-ast
-                    (concat
-                      transformed-ast
-                      @*initial-registrations*))]
+          transformed-ast (binding [*initialize-main-traces*
+                                    (not (some #{:reload} settings))]
+                            (walk-trace-branches ast trace-atom))
+          new-ast transformed-ast]
       ;(clojure.pprint/pprint *initial-registrations*)
       ;(clojure.pprint/pprint new-ast) 
       new-ast
