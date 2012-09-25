@@ -39,7 +39,7 @@
 (defn register-branch
   "Register a branch given a list of
   branch ids"
-  [trace-atom node & bs]
+  [trace-atom node ns & bs]
   (let [branch-map (zipmap bs (repeat 0))
         ast (:body node)]
     (when *initialize-main-traces*
@@ -49,7 +49,7 @@
              (merge
                {:line (:line node) 
                 :type (:type node)
-                :ns (ns-name *ns*)
+                :ns ns
                 :ast ast
                 :parent *parent-branch*}
                branch-map))) 
@@ -73,9 +73,9 @@
   info to the *trace-atom* and adding
   a call to update its data from the
   *trace-atom* when the branch gets executed."
-  [trace-atom node]
+  [trace-atom ns node]
   (let [ast (:body node)
-        id (register-branch trace-atom node :lhs :rhs)]
+        id (register-branch trace-atom node ns :lhs :rhs)]
     `(if ~(first ast)
        ~(trace-branch trace-atom
                       (nth ast 1)
@@ -104,11 +104,11 @@
     [name+metadata fixup-single-arity]))
 
 (defn branchdetect-fn
-  [trace-atom fn-decl node]
+  [trace-atom fn-decl ns node]
   (let [ast (:body node)
         [fn-name+meta fn-bodies] (extract-fn-arities ast) 
         branch-ids (map (comp count first) fn-bodies) 
-        id (apply register-branch trace-atom node branch-ids)]
+        id (apply register-branch trace-atom node ns branch-ids)]
     (cons fn-decl (concat fn-name+meta
                         (map (fn [body branch-id]
                                (list (first body) ;arg list
@@ -116,13 +116,13 @@
                                                    id branch-id)))
                              fn-bodies branch-ids)))))
 (defn branchdetect-cond
-  [trace-atom node]
+  [trace-atom ns node]
   (let [clauses (partition 2 (:body node))
         branch-ids (range (count clauses))
         conditions (map first clauses)
         branches (map second clauses)
         id (apply register-branch
-                  trace-atom node branch-ids)]
+                  trace-atom node ns branch-ids)]
     `(cond ~@(interleave
                conditions
                (map (partial trace-branch trace-atom)
@@ -131,7 +131,7 @@
                     branch-ids)))))
 
 (defn branchdetect-condp
-  [trace-atom node]
+  [trace-atom ns node]
   (let [clauses (partition 2 2 [] (nthnext (:body node) 2))
         final-clause (last clauses)
         final-clause (if (= 1 (count final-clause))
@@ -144,7 +144,7 @@
         conditions (map first clauses)
         branches (map second clauses)
         id (apply register-branch
-                  trace-atom node branch-ids)]
+                  trace-atom node ns branch-ids)]
     (let [without-final
           `(condp ~(first (:body node)) ~(second (:body node))
              ~@(interleave
@@ -165,24 +165,25 @@
 (defmulti analyze-node
   "Takes a node and returns either the
   unmodified node or the node having been instrumented."
-  (fn [node line trace-atom]
+  (fn [node line ns trace-atom]
     (try
       (-> node first name keyword)
       (catch Exception _
         :terminal))))
 
 (defmethod analyze-node :default
-  [node line trace-atom]
+  [node line ns trace-atom]
   node)
 
 (defmethod analyze-node :terminal
-  [node line trace-atom]
+  [node line ns trace-atom]
   node)
 
 (defmethod analyze-node :if
-  [node line trace-atom]
+  [node line ns trace-atom]
   (branchdetect-if
     trace-atom
+    ns
     {:type :if
      :line line
      :body (if (= 3 (count node))
@@ -190,42 +191,46 @@
              (rest node))}))
 
 (defmethod analyze-node :cond
-  [node line trace-atom]
+  [node line ns trace-atom]
   (branchdetect-cond 
     trace-atom
+    ns
     {:type :cond 
      :line line
      :body (rest node)}))
 
 (defmethod analyze-node :condp
-  [node line trace-atom]
+  [node line ns trace-atom]
   (branchdetect-condp
     trace-atom
+    ns
     {:type :condp
      :line line
      :body (rest node)}))
 
 
 (defmethod analyze-node :defn
-  [node line trace-atom]
+  [node line ns trace-atom]
   (branchdetect-fn 
     trace-atom
     `defn
+    ns
     {:type :defn 
      :line line
      :body (rest node)}))
 
 (defmethod analyze-node :fn
-  [node line trace-atom]
+  [node line ns trace-atom]
   (branchdetect-fn 
     trace-atom
     `fn
+    ns
     {:type :fn 
      :line line
      :body (rest node)}))
 
 (defn walk-trace-branches
-  [node trace-atom]
+  [node trace-atom ns]
   (if-not (seqable? node)
     node
     (binding [*parent-branch* *current-branch*
@@ -236,9 +241,21 @@
                         ;for tracing macros
                         #_(not= 'quote (first node))
                         )
-                 (doall (map #(walk-trace-branches % trace-atom) node))
+                 (doall (map #(walk-trace-branches % trace-atom ns) node))
                  node)]
-      (analyze-node node line trace-atom)))))
+      (analyze-node node line ns trace-atom)))))
+
+(defn get-ns-name
+  "Searches for the `ns` macro in the given AST and returns
+  the namespace for the given AST."
+  [ast]
+  (cond
+    (= (first ast) `do)
+    (get-ns-name (second ast))
+    (= (name (first ast)) "ns") 
+    (second ast)
+    :else
+    'user))
 
 (defn trace-if-branches
   "Instruments the ast to trace all conditional branches (cond, condp, fn, defn, and if).
@@ -249,14 +266,12 @@
   (binding [*trace-id* (atom 0)
             *initial-registrations* (atom [])]
     (let [trace-atom 'guzheng.core/main-trace-atom
+          ns (get-ns-name ast)
           transformed-ast (binding [*initialize-main-traces*
                                     (not (some #{:reload} settings))]
-                            (walk-trace-branches ast trace-atom))
+                            (walk-trace-branches ast trace-atom ns))
           new-ast transformed-ast]
-      ;(clojure.pprint/pprint *initial-registrations*)
-      ;(clojure.pprint/pprint new-ast) 
-      new-ast
-      )))
+      new-ast)))
 
 (defn instrument-ns
   "Takes an ns and a form for the instrumnetation
