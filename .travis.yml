@@ -1,7 +1,7 @@
 language: clojure
 lein: lein2
 
-script: lein install; cd lein-guzheng; lein install; cd ..; lein test
+script: export LEIN_SNAPSHOTS_IN_RELEASE=1; lein install; cd lein-guzheng; lein install; cd ..; lein test
 
 branches:
   only:
