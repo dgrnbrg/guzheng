@@ -1,6 +1,12 @@
 (ns guzheng.core
-  (:use [bultitude.core :only [path-for]])
-  (:require [clojure pprint test]))
+  "TODO: when-first, for, lazy-seq, lazy-cat, definline, defmacro, everything w/ protocols.
+  "
+  (:refer-clojure :exclude [==])
+  (:use [bultitude.core :only [path-for]]
+        [clojure.core.logic]
+        [clojure.string :only [join]])
+  (:require [clojure pprint test]
+            [sleight.core :as sleight]))
 
 (defn str->reader
   "Converts a string to a java.io.Reader"
@@ -8,12 +14,6 @@
   (-> s
     java.io.StringReader.
     clojure.lang.LineNumberingPushbackReader.))
-
-(defn seqable?
-  "Returns true if (seq x) will succeed, false otherwise."
-  [x]
-  (or (seq? x)
-      ))
 
 (defn instrument
   "Takes a string, parses it and passes it to
@@ -29,8 +29,7 @@
     (in-ns old-ns)
     result))
 
-(def ^:dynamic *trace-id*)
-(def ^:dynamic *initial-registrations*)
+(def *trace-id* (atom 0))
 (def ^:dynamic *current-branch* nil)
 (def ^:dynamic *parent-branch* nil)
 (def ^:dynamic *initialize-main-traces* false)
@@ -73,18 +72,34 @@
   info to the *trace-atom* and adding
   a call to update its data from the
   *trace-atom* when the branch gets executed."
-  [trace-atom ns node]
-  (let [ast (:body node)
-        id (register-branch trace-atom node ns :lhs :rhs)]
-    `(if ~(first ast)
-       ~(trace-branch trace-atom
-                      (nth ast 1)
-                      id
-                      :lhs)
-       ~(trace-branch trace-atom
-                      (nth ast 2)
-                      id
-                      :rhs))))
+   ([trace-atom if-form line ns node]
+    (branchdetect-if
+      trace-atom
+      if-form
+      (-> if-form name keyword)
+      line
+      ns
+      node))
+  ([trace-atom if-form if-type line ns node]
+   (let [ast (if (= 3 (count node))
+               (concat (rest node) [nil])
+               (rest node)) 
+         node {:type if-type
+               :line line
+               :body (if (= 3 (count node))
+                       (conj (rest node) nil)
+                       (rest node))}
+         id (register-branch nil node ns :lhs :rhs)]
+     (list if-form 
+           (first ast) 
+           (trace-branch trace-atom
+                         (nth ast 1)
+                         id
+                         :lhs) 
+           (trace-branch trace-atom
+                         (nth ast 2)
+                         id
+                         :rhs)))))
 
 (defn index-of-first
   [pred s]
@@ -93,28 +108,38 @@
       i
       (recur (inc i) (next s)))))
 
+(defn normalize-fntail
+  "If the fntail isn't in the multi-arity form,
+  makes it into the multiarity form. Otherwise returns
+  the fntail.
+  
+  So `([a b c] ...)` will become `(([a b c] ...))`,
+  and `(([a] ...) ([a b] ...))` will be unchanged."
+  [fntail]
+  (if (vector? (first fntail))
+    (list fntail)
+    fntail) )
+
 (defn extract-fn-arities
   "Takes a fn body and extracts the single or multiple arity form."
   [fn-body]
   (let [[name+metadata bodies] (split-with #(not (or (seq? %)
                                                      (vector? %))) fn-body)
-        fixup-single-arity (if (vector? (first bodies))
-                             (list bodies)
-                             bodies)]
+        fixup-single-arity (normalize-fntail bodies)]
     [name+metadata fixup-single-arity]))
 
 (defn branchdetect-fn
   [trace-atom fn-decl ns node]
   (let [ast (:body node)
         [fn-name+meta fn-bodies] (extract-fn-arities ast) 
-        branch-ids (map (comp count first) fn-bodies) 
+        branch-ids (range (count fn-bodies)) 
         id (apply register-branch trace-atom node ns branch-ids)]
     (cons fn-decl (concat fn-name+meta
-                        (map (fn [body branch-id]
-                               (list (first body) ;arg list
-                                     (trace-branch trace-atom (cons `do (rest body))
-                                                   id branch-id)))
-                             fn-bodies branch-ids)))))
+                          (map (fn [body branch-id]
+                                 (list (first body) ;arg list
+                                       (trace-branch trace-atom (cons `do (rest body))
+                                                     id branch-id)))
+                               fn-bodies branch-ids)))))
 (defn branchdetect-cond
   [trace-atom ns node]
   (let [clauses (partition 2 (:body node))
@@ -130,37 +155,52 @@
                     (repeat id)
                     branch-ids)))))
 
+(defne match-clauses [clauses parsed]
+  ([() ()])
+  ([[?last] p]
+   (== [{:expr ?last
+        :default true}]
+       p))
+  ([[?head :>> ?tail . ?rest] p]
+   (fresh [parsed-tail]
+          (match-clauses ?rest parsed-tail)
+          (conso {:test ?head
+                  :expr ?tail
+                  :feed true}
+                 parsed-tail
+                 p)))
+  ([[?head ?tail . ?rest] p]
+   (!= ?tail :>>)
+   (fresh [parsed-tail]
+          (match-clauses ?rest parsed-tail)
+          (conso {:test ?head
+                  :expr ?tail}
+                 parsed-tail
+                 p))))
+
 (defn branchdetect-condp
   [trace-atom ns node]
-  (let [clauses (partition 2 2 [] (nthnext (:body node) 2))
-        final-clause (last clauses)
-        final-clause (if (= 1 (count final-clause))
-                       (first final-clause) 
-                       nil)
-        branch-ids (range (count clauses))
-        clauses (if final-clause
-                  (butlast clauses)
-                  clauses)
-        conditions (map first clauses)
-        branches (map second clauses)
+  (let [clauses (nthnext (:body node) 2)
+        parsed-clauses (first (run 1 [q]
+                                   (match-clauses clauses q)))
+        branch-ids (range (count parsed-clauses))
         id (apply register-branch
                   trace-atom node ns branch-ids)]
-    (let [without-final
-          `(condp ~(first (:body node)) ~(second (:body node))
-             ~@(interleave
-                 conditions
-                 (map (partial trace-branch trace-atom)
-                      branches
-                      (repeat id)
-                      branch-ids))
-             )]
-      (if final-clause
-        (concat without-final
-                (list (trace-branch trace-atom
-                                    final-clause
-                                    id
-                                    (last branch-ids))))
-        without-final))))
+    (concat (cons `condp (take 2 (:body node)))
+            (mapcat
+              (fn [{:keys [expr test feed default]} branch-id]
+                (let [expr (trace-branch
+                             trace-atom
+                             expr
+                             id
+                             branch-id)]
+                  (if-not default
+                    (if feed
+                      [test :>> expr]
+                      [test expr])
+                    [expr])))
+              parsed-clauses
+              branch-ids))))
 
 (defmulti analyze-node
   "Takes a node and returns either the
@@ -179,16 +219,75 @@
   [node line ns trace-atom]
   node)
 
+(defmethod analyze-node :if-let
+  [node line ns trace-atom]
+  (branchdetect-if
+    trace-atom
+    `if-let
+    line
+    ns
+    node))
+
+(defmethod analyze-node :if-not
+  [node line ns trace-atom]
+  (branchdetect-if
+    trace-atom
+    `if-not
+    line
+    ns
+    node))
+
 (defmethod analyze-node :if
   [node line ns trace-atom]
   (branchdetect-if
     trace-atom
+    `if
+    line
     ns
-    {:type :if
-     :line line
-     :body (if (= 3 (count node))
-             (conj (rest node) nil)
-             (rest node))}))
+    node))
+
+(defmethod analyze-node :when
+  [node line ns trace-atom]
+  (branchdetect-if
+    trace-atom
+    `if
+    :when
+    line
+    ns
+    (macroexpand-1 node)))
+
+(defmethod analyze-node :when-let
+  [node line ns trace-atom]
+  (branchdetect-if
+    trace-atom
+    `if-let
+    :when-let
+    line
+    ns
+    (macroexpand-1 node)))
+
+(defmethod analyze-node :when-not
+  [node line ns trace-atom]
+  (branchdetect-if
+    trace-atom
+    `if
+    :when-not
+    line
+    ns
+    (macroexpand-1 node)))
+
+(defmethod analyze-node :delay
+  [node line ns trace-atom]
+  (let [node {:type :delay
+              :line line
+              :body (cons `do (rest node))}
+        id (register-branch trace-atom node ns :delayed)]
+    (list `delay
+          (trace-branch
+            trace-atom
+            (:body node)
+            id
+            :delayed))))
 
 (defmethod analyze-node :cond
   [node line ns trace-atom]
@@ -208,6 +307,47 @@
      :line line
      :body (rest node)}))
 
+(defmethod analyze-node :case
+  [node line ns trace-atom]
+  (let [node {:type :case
+              :line line
+              :body (rest node)}
+        [e & clauses] (:body node)
+        clauses (partition 2 2 [] clauses)
+        branch-ids (range (count clauses))
+        last-clause (last clauses)
+        default (when (= 1 (count last-clause))
+                  last-clause)
+        clauses (if default
+                  (butlast clauses)
+                  clauses)
+        id (apply register-branch
+                  trace-atom node ns branch-ids)]
+    (concat
+      (list `case e)
+      (mapcat (fn [[constant expr] branch-id]
+                [constant
+                 (trace-branch
+                   trace-atom
+                   expr
+                   id
+                   branch-id)])
+              clauses branch-ids)
+      (when last-clause
+        (list (trace-branch trace-atom
+                            (first last-clause)
+                            id
+                            (last branch-ids))))))) 
+
+(defmethod analyze-node :defn-
+  [node line ns trace-atom]
+  (branchdetect-fn 
+    trace-atom
+    `defn-
+    ns
+    {:type :defn-
+     :line line
+     :body (rest node)}))
 
 (defmethod analyze-node :defn
   [node line ns trace-atom]
@@ -229,20 +369,46 @@
      :line line
      :body (rest node)}))
 
+(defmethod analyze-node :defmethod
+  [node line ns trace-atom]
+  (let [[d-m multifn dispatch-val & fn-tail] node
+        node {:type :defmethod
+              :line line
+              :body (rest node)}
+        fn-tails (normalize-fntail fn-tail)
+        branch-ids (range (count fn-tails))
+        id (apply register-branch trace-atom node ns branch-ids)]
+    (list* d-m multifn dispatch-val
+           (map (fn [[args & body] branch-id]
+                  (list args
+                        (trace-branch trace-atom (cons `do body)
+                                      id branch-id)))
+                fn-tails
+                branch-ids))))
+
+(defn preservative-walk
+  [obj f]
+  (cond
+    (list? obj) (doall (map f obj))
+    (vector? obj) (into [] (map f obj))
+    (set? obj) (into #{} (map f obj))
+    (map? obj) (into {} (map (fn [[k v]]
+                               [(f k) (f v)])))
+    :else obj))
+
 (defn walk-trace-branches
   [node trace-atom ns]
-  (if-not (seqable? node)
+  ;TODO: perhaps this if is not needed
+  (if-not (->> [list? vector? map? set?]
+            (map #(% node)) 
+            (some identity))
     node
     (binding [*parent-branch* *current-branch*
               *current-branch* (swap! *trace-id* inc)]
      (let [line (-> node meta :line)
-          node (if (and (seqable? node)
-                        ;TODO: determine if the following line is needed
-                        ;for tracing macros
-                        #_(not= 'quote (first node))
-                        )
-                 (doall (map #(walk-trace-branches % trace-atom ns) node))
-                 node)]
+          node (preservative-walk
+                 node
+                 #(walk-trace-branches % trace-atom ns))]
       (analyze-node node line ns trace-atom)))))
 
 (defn get-ns-name
@@ -263,15 +429,14 @@
   If passed the setting :reload, will not include the code that resets the counters.
   "
   [ast & settings] 
-  (binding [*trace-id* (atom 0)
-            *initial-registrations* (atom [])]
-    (let [trace-atom 'guzheng.core/main-trace-atom
-          ns (get-ns-name ast)
-          transformed-ast (binding [*initialize-main-traces*
-                                    (not (some #{:reload} settings))]
-                            (walk-trace-branches ast trace-atom ns))
-          new-ast transformed-ast]
-      new-ast)))
+  (let [trace-atom 'guzheng.core/main-trace-atom
+        transformed-ast (binding [*initialize-main-traces*
+                                  (not (some #{:reload} settings))]
+                          (walk-trace-branches ast trace-atom (ns-name *ns*)))
+        new-ast transformed-ast]
+    ;(clojure.pprint/pprint new-ast)
+    ;(flush)
+    new-ast))
 
 (defn instrument-ns
   "Takes an ns and a form for the instrumnetation
@@ -296,20 +461,25 @@
 (defn report-missing-coverage
   []
   (let [results @main-trace-atom
+        report-msgs (atom [])
         errors-so-far (atom #{})]
     (doseq [[id {:keys [type ast line ns parent] :as data}] results]
       (letfn [(report [msg stmt]
                 (when-not (contains? @errors-so-far parent)
-                  (println (str "in ns " ns ": "
-                                msg
-                                " is not covered in \""
-                                stmt
-                                "\" on line " line)))
+                  (swap! report-msgs conj
+                         {:line line
+                          :ns ns
+                          :msg (str "in ns " ns ": "
+                                    (print-str msg)
+                                    " is not covered in \""
+                                    stmt
+                                    "\" on line " line)}))
                 (swap! errors-so-far conj id)) 
               (report-fn [fn-decl]
                 (let [[_ bodies] (extract-fn-arities ast)
-                      arities (map (comp (juxt identity count)
-                                         first) bodies)]
+                      arities (map #(vector (first %1) %2) 
+                                   bodies
+                                   (range))]
                   (doseq [[args arity] arities]
                     (when (zero? (get data arity))
                       (report (str "arity " args)
@@ -320,8 +490,56 @@
                   (report "true branch" "if"))
                 (when (zero? (:rhs data))
                   (report "false branch" "if")))
+          :if-not (do
+                    (when (zero? (:lhs data))
+                      (report "true branch" "if-not"))
+                    (when (zero? (:rhs data))
+                      (report "false branch" "if-not")))
+          :if-let (do
+                    (when (zero? (:lhs data))
+                      (report "true branch" "if-let"))
+                    (when (zero? (:rhs data))
+                      (report "false branch" "if-let")))
+          :when (do
+                  (when (zero? (:lhs data))
+                    (report "body" "when")))
+          :when-let (do
+                  (when (zero? (:lhs data))
+                    (report "body" "when-let")))
+          :when-not (do
+                      (when (zero? (:rhs data))
+                        (report "body" "when-not")))
           :defn (report-fn "defn") 
+          :defn- (report-fn "defn-") 
           :fn (report-fn "fn")
+          :case (let [ast (drop 1 ast)
+                      clauses (keep-indexed
+                                vector
+                                (partition 2 ast))
+                      final (if (odd? (count ast))
+                              [(-> (count ast)
+                                 dec
+                                 (/ 2))
+                               (vector "default case" 
+                                       (last ast))] 
+                              nil)
+                      clauses (if-not (nil? final)
+                                (conj clauses final)
+                                clauses)]
+                  (doseq [[id clause] clauses]
+                    (when (zero? (get data id))
+                      (report (first clause) "case"))))
+          :delay (when (zero? (:delayed data))
+                   (report "body" "delay"))
+          :defmethod (let [[multifn dispatch-val & fn-tail] ast
+                           fn-tails (map vector
+                                         (normalize-fntail fn-tail)
+                                         (range))]
+                       (doseq [[[args & _] id] fn-tails]
+                         (when (zero? (get data id))
+                           (report (str "arity " args)
+                                   (str "defmethod for dispatch value "
+                                        dispatch-val)))))
           :cond (let [clauses (keep-indexed
                                 vector
                                 (partition 2 ast))]
@@ -329,20 +547,24 @@
                     (when (zero? (get data id))
                       (report (first clause) "cond"))))
           :condp (let [ast (drop 2 ast)
-                       clauses (keep-indexed
-                                 vector
-                                 (partition 2 ast))
-                       final (if (odd? (count ast))
-                               [(-> (count ast)
-                                  dec
-                                  (/ 2))
-                                (vector "last clause"
-                                        (last ast))] 
-                               nil)
-                       clauses (if-not (nil? final)
-                                 (conj clauses final)
-                                 clauses)]
-                   (doseq [[id clause] clauses]
+                       parsed-clauses (first (run 1 [q]
+                                                  (match-clauses ast q)))
+                       clauses (map #(assoc %1 :id %2)
+                                    parsed-clauses (range))]
+                   (doseq [{:keys [id test expr default]} clauses]
                      (when (zero? (get data id))
-                       (report (first clause) "condp"))))
-          nil)))))
+                       (report (if-not default
+                                 test
+                                 "last clause") "condp"))))
+          nil)))
+    (->> @report-msgs
+      (sort-by (juxt :line :ns))
+      (map :msg)
+      (join "\n")
+      println)))
+
+(sleight/def-transform instrument
+  :pre (fn []
+         (-> (java.lang.Runtime/getRuntime)
+           (.addShutdownHook (java.lang.Thread. report-missing-coverage))))
+  :transform trace-if-branches)
