@@ -29,7 +29,7 @@
     (in-ns old-ns)
     result))
 
-(def *trace-id* (atom 0))
+(def trace-id (atom 0))
 (def ^:dynamic *current-branch* nil)
 (def ^:dynamic *parent-branch* nil)
 (def ^:dynamic *initialize-main-traces* false)
@@ -404,7 +404,7 @@
             (some identity))
     node
     (binding [*parent-branch* *current-branch*
-              *current-branch* (swap! *trace-id* inc)]
+              *current-branch* (swap! trace-id inc)]
      (let [line (-> node meta :line)
           node (preservative-walk
                  node
