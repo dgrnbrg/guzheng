@@ -27,7 +27,10 @@ in ns foo.core: body is not covered in \"delay\" on line 95
 in ns foo.core: arity [x] is not covered in \"defmethod for dispatch value :a\" on line 104
 ")
 
-(deftest test-lein1
+(comment
+  deprecated for now
+
+  (deftest test-lein1
   (let [{:keys [err out exit]}
         (sh "lein" "clean," "deps," "version" :dir "test-project")]
     (println out)
@@ -37,7 +40,7 @@ in ns foo.core: arity [x] is not covered in \"defmethod for dispatch value :a\" 
         (sh "lein" "guzheng" "foo.core" "--" "test" :dir "test-project")]
     (println out)
     (is (= 0 exit))
-    (is (.endsWith out expected-output))))
+    (is (.endsWith out expected-output)))))
 
 (deftest test-lein2
   (let [{:keys [err out exit]}
