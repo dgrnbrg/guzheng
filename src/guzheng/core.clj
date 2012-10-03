@@ -564,7 +564,5 @@
       println)))
 
 (sleight/def-transform instrument
-  :pre (fn []
-         (-> (java.lang.Runtime/getRuntime)
-           (.addShutdownHook (java.lang.Thread. report-missing-coverage))))
+  :post report-missing-coverage
   :transform trace-if-branches)
