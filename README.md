@@ -1,12 +1,16 @@
+[![Build Status](https://secure.travis-ci.org/dgrnbrg/guzheng.png)](http://travis-ci.org/dgrnbrg/guzheng)
+
 # guzheng
 
-guzheng is a library for instrumenting clojure code. It's named after the eponymous traditional chinese instrument.
+guzheng is a library for doing branch coverage analysis of clojure code. It's named after
+the eponymous traditional chinese instrument. You'll want to use the lein-guzheng plugin
+rather than invoking guzheng directly, unless you're doing something really exotic.
 
 ## Usage
 
-Read a clojure file into a string. Then, use the instrument function. The instrument function
-takes a String to instrument and an instrumentation function. Since it's annoying to get that String,
-consider instrument-ns or instrument-nses to resolve an ns to source code automatically.
+See the subfolder containing lein-guzheng for details on how to invoke the guzheng plugin.
+
+guzheng now uses ztellman/sleight to instrument clojure code. See @ztellman's repository for details of sleight.
 
 ## License
 
