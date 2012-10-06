@@ -10,3 +10,23 @@
 test/guzheng/test/.core.clj.swp
 
 src/guzheng/.sample.clj.swp
+
+lein-guzheng/.lein-deps-sum
+
+lein-guzheng/.lein-plugins/checksum
+
+lein-guzheng/pom.xml
+
+lein-guzheng/target/stale/dependencies
+
+target/stale/dependencies
+
+test-project/.lein-deps-sum
+
+test-project/.lein-failures
+
+test-project/.lein-plugins/checksum
+
+test-project/pom.xml
+
+test-project/target/stale/dependencies
