@@ -1,8 +1,8 @@
 (ns leiningen.guzheng
   (:use clojure.pprint)
-  (:require leiningen.test
-            [leiningen.core.project :as project])
+  (:require leiningen.test)
   (:require [leinjacker.eval :as eval])
+  (:require [leinjacker.utils :as utils])
   (:require [clojure.java.io :as io]))
 
 (def ^ {:private true :const :true}
@@ -17,14 +17,6 @@
   (let [[nses [_ & subtask]] (split-with #(not= "--" %) args)]
     [nses subtask]))
 
-(defn update-project-dependencies
-  [project deps]
-  (let [profile-name (-> (gensym) name keyword)
-        added-profile (project/add-profiles project
-                                            {profile-name deps})
-        merged-profile (project/merge-profiles added-profile [profile-name])]
-    merged-profile))
-
 (defn guzheng
   "Takes a list of namespaces followed by -- and
   another leiningen task and executes that task
@@ -32,7 +24,7 @@
   [project & args]
   (let [[nses [subtask & sub-args]] (split-ns-subtask args)
         project (-> project
-                  (update-project-dependencies
+                  (utils/merge-projects
                     {:dependencies [guzheng-version]
                      :sleight {:guzheng {:transforms ['guzheng.core/instrument]
                                          :namespaces (vec nses)}}}))

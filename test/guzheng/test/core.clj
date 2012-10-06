@@ -27,20 +27,18 @@ in ns foo.core: body is not covered in \"delay\" on line 95
 in ns foo.core: arity [x] is not covered in \"defmethod for dispatch value :a\" on line 104
 ")
 
-(comment
-  deprecated for now
-
-  (deftest test-lein1
-  (let [{:keys [err out exit]}
-        (sh "lein" "clean," "deps," "version" :dir "test-project")]
-    (println out)
-    (is (re-find #"Leiningen 1\." out))
-    (is (= 0 exit))) 
-  (let [{:keys [err out exit]}
-        (sh "lein" "guzheng" "foo.core" "--" "test" :dir "test-project")]
-    (println out)
-    (is (= 0 exit))
-    (is (.endsWith out expected-output)))))
+(deftest test-lein1
+  (sh "rm" "-rf" ".lein-plugins" :dir "test-project")
+  (let [home (System/getenv "HOME")] 
+    (let [{:keys [err out exit] :as r}
+          (sh "lein" "clean," "deps," "version" :dir "test-project" :env {"HOME" home})]
+      (is (re-find #"Leiningen 1\." out))
+      (is (= 0 exit))) 
+    (let [{:keys [err out exit]}
+          (sh "lein" "guzheng" "foo.core" "--" "test" :dir "test-project" :env {"HOME" home})]
+      (println out)
+      (is (= 0 exit))
+      (is (.endsWith out expected-output)))))
 
 (deftest test-lein2
   (let [{:keys [err out exit]}
