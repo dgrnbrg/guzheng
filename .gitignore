@@ -30,3 +30,5 @@ test-project/.lein-plugins/checksum
 test-project/pom.xml
 
 test-project/target/stale/dependencies
+
+.lein-plugins/checksum
