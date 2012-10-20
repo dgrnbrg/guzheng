@@ -4,5 +4,5 @@
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :eval-in-leiningen true
   :dependencies [[lein-sleight "0.2.0-SNAPSHOT"]
-                 [leinjacker "[0.3.0,)"]]
+                 [leinjacker "[0.3.3,)"]]
   :plugins [[lein-clojars "0.6.0"]])
