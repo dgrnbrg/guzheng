@@ -1,4 +1,4 @@
-(defproject lein-guzheng "0.4.4-SNAPSHOT"
+(defproject lein-guzheng "0.4.4"
   :description "This creates a lein plugin for guzheng"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}

@@ -4,9 +4,9 @@ A Leiningen plugin to perform branch coverage analysis on your project.
 
 ## Usage
 
-Put `[lein-guzheng "0.4.3"]` into the `:plugins` vector of your
+Put `[lein-guzheng "0.4.4"]` into the `:plugins` vector of your
 `:user` profile, or if you are on Leiningen 1.x do `lein plugin install
-lein-guzheng 0.4.3`).
+lein-guzheng 0.4.4`).
 
 One way to run guzheng is to explicitly list the namespaces you want coverage analysis
 for, then `--`, and then the task to run the code that will exercise your project (usually
