@@ -393,7 +393,8 @@
     (vector? obj) (into [] (map f obj))
     (set? obj) (into #{} (map f obj))
     (map? obj) (into {} (map (fn [[k v]]
-                               [(f k) (f v)])))
+                               [(f k) (f v)])
+                             obj))
     :else obj))
 
 (defn walk-trace-branches
