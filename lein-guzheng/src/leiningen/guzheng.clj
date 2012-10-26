@@ -7,7 +7,7 @@
 
 (def ^ {:private true :const :true}
   guzheng-version
-  ['guzheng "1.2.5"])
+  ['guzheng "1.2.6"])
 
 (defn- split-ns-subtask
   "Takes the namespaces followed by \"--\" followed
