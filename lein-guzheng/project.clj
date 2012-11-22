@@ -1,5 +1,6 @@
-(defproject lein-guzheng "0.4.4"
-  :description "This creates a lein plugin for guzheng"
+(defproject lein-guzheng "0.4.5"
+  :description "A lein plugin for guzheng"
+  :url "https://github.com/dgrnbrg/guzheng"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :eval-in-leiningen true
