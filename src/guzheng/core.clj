@@ -4,7 +4,8 @@
   (:refer-clojure :exclude [==])
   (:use [bultitude.core :only [path-for]]
         [clojure.core.logic]
-        [clojure.string :only [join]])
+        [clojure.string :only [join split replace]]
+        [clojure.contrib.prxml :only [prxml]])
   (:require [clojure pprint test]
             [sleight.core :as sleight]))
 
@@ -34,6 +35,7 @@
 (def ^:dynamic *parent-branch* nil)
 (def ^:dynamic *initialize-main-traces* false)
 (def main-trace-atom (atom {}))
+(def statistic (atom {}))
 
 (defn register-branch
   "Register a branch given a list of
@@ -459,59 +461,134 @@
   (doseq [ns nses]
     (instrument-ns ns f)))
 
+(defn report-cobertura-xml []
+  (let [get-paths (fn [pattern otherwise]
+                    (let [project-f-cnt (slurp "project.clj")]
+                      (clojure.string/split
+                        (if-let [paths (re-find pattern project-f-cnt)]
+                          (last paths)
+                          otherwise) #"\" \"")))
+        source-paths (get-paths #"source-paths +\[\"(.*)\"\]" "src")
+        test-paths (get-paths #"test-paths +\[\"(.*)\"\]" "test")
+        line-rate (reduce + (for [[_ package] @statistic [_ class] package]
+                              (/ (reduce + 0.1 (:covered class))
+                                 (reduce + 0.1 (clojure.set/union (:covered class)
+                                                                  (:uncovered class))))))
+        packages (conj [:packages]
+                       (reverse (reduce (fn [packages-acc package]
+                                          (let [pkg-name (name (first package))
+                                                classes  (second package)
+                                                line-rate (reduce + (for [[_ class] classes]
+                                                                      (/ (reduce + 0.1 (:covered class))
+                                                                         (reduce + 0.1 (clojure.set/union (:covered class)
+                                                                                                          (:uncovered class))))))]
+                                            (-> packages-acc
+                                              (conj [:package {:name pkg-name :line-rate line-rate :branch-rate 1.0 :complexity 1.0}
+                                                     (reduce (fn [classes-acc class]
+                                                               (-> classes-acc
+                                                                 (conj [:class {:name (name (first class))
+                                                                                :filename (str (replace pkg-name #"\." "/")
+                                                                                               "/"
+                                                                                               (replace (name (first class)) #"(.+)-(.+)" "$1_$2") ".clj")
+                                                                                :line-rate (:line-rate (second class))
+                                                                                :branch-rate 1.0
+                                                                                :complexity 1.0}
+                                                                        [:methods]
+                                                                        [:lines
+                                                                         (reduce (fn [lines-acc line]
+                                                                                   (conj lines-acc [:line {:number line :hits 1 :branch "false"}]))
+                                                                                 () (sort (:covered (second class))))
+                                                                         (reduce (fn [lines-acc line]
+                                                                                   (conj lines-acc [:line {:number line :hits 0 :branch "false"}]))
+                                                                                 () (sort (:uncovered (second class))))
+                                                                         ]]))) () classes)])))) () @statistic)))
+
+        report (list [:decl! {:version "1.0"}]
+                     [:doctype! "coverage SYSTEM \"http://cobertura.sourceforge.net/xml/coverage-03.dtd\""]
+                     [:coverage {:line-rate line-rate :branch-rate 1.0 :verison 1.9 :timestamp (System/currentTimeMillis)}
+                      [:sources
+                       (reduce (fn [sources-acc source]
+                                 (conj sources-acc [:source (str (. (clojure.java.io/file ".") getCanonicalPath) "/" source "/")]))
+                               () (concat source-paths test-paths))]
+                      packages])]
+    (spit "target/coverage.xml" (with-out-str (prxml report)))))
+
 (defn report-missing-coverage
   []
   (let [results @main-trace-atom
         report-msgs (atom [])
         errors-so-far (atom #{})]
     (doseq [[id {:keys [type ast line ns parent] :as data}] results]
-      (letfn [(report [msg stmt]
+      (when (nil? ((keyword ns) @statistic))
+        (let [pkg (keyword (join "." (drop-last (split (name ns) #"\."))))
+              cls (keyword (last (split (name ns) #"\.")))]
+          (swap! statistic assoc-in [pkg cls] {:covered #{} :uncovered #{} :line-rate 0})))
+      (letfn [(upd-statistic [field]
+                (let [pkg (keyword (join "." (drop-last (split (name ns) #"\."))))
+                      cls (keyword (last (split (name ns) #"\.")))
+                      some-ns (keyword ns)
+                      covered (get-in @statistic [pkg cls :covered])
+                      uncovered (get-in @statistic [pkg cls :uncovered])
+                      line-rate (/ (reduce + 0.1 covered) (reduce + 0.1 (clojure.set/union covered uncovered)))]
+                  (do
+                    (swap! statistic update-in [pkg cls field] conj line)
+                    (swap! statistic assoc-in [pkg cls :line-rate] line-rate))))
+              (report [msg stmt]
                 (when-not (contains? @errors-so-far parent)
-                  (swap! report-msgs conj
-                         {:line line
-                          :ns ns
-                          :msg (str "in ns " ns ": "
-                                    (print-str msg)
-                                    " is not covered in \""
-                                    stmt
-                                    "\" on line " line)}))
-                (swap! errors-so-far conj id)) 
+                  (do
+                    (swap! report-msgs conj
+                           {:line line
+                            :ns ns
+                            :msg (str "in ns " ns ": "
+                                      (print-str msg)
+                                      " is not covered in \""
+                                      stmt
+                                      "\" on line " line)})
+                    (upd-statistic :uncovered)))
+                (swap! errors-so-far conj id))
               (report-fn [fn-decl]
                 (let [[_ bodies] (extract-fn-arities ast)
                       arities (map #(vector (first %1) %2) 
                                    bodies
                                    (range))]
                   (doseq [[args arity] arities]
-                    (when (zero? (get data arity))
+                    (if (zero? (get data arity))
                       (report (str "arity " args)
-                              (str fn-decl \space (first ast)))))))] 
+                              (str fn-decl \space (first ast)))
+                      (upd-statistic :uncovered)))))]
         (condp = type
           :if (do
-                (when (zero? (:lhs data))
-                  (report "true branch" "if"))
-                (when (zero? (:rhs data))
-                  (report "false branch" "if")))
+                (if (zero? (:lhs data))
+                  (report "true branch" "if")
+                  (upd-statistic :covered))
+                (if (zero? (:rhs data))
+                  (report "false branch" "if")
+                  (upd-statistic :covered)))
           :if-not (do
-                    (when (zero? (:lhs data))
-                      (report "true branch" "if-not"))
-                    (when (zero? (:rhs data))
-                      (report "false branch" "if-not")))
+                    (if (zero? (:lhs data))
+                      (report "true branch" "if-not")
+                      (upd-statistic :covered))
+                    (if (zero? (:rhs data))
+                      (report "false branch" "if-not")
+                      (upd-statistic :covered)))
           :if-let (do
-                    (when (zero? (:lhs data))
-                      (report "true branch" "if-let"))
-                    (when (zero? (:rhs data))
-                      (report "false branch" "if-let")))
-          :when (do
-                  (when (zero? (:lhs data))
-                    (report "body" "when")))
-          :when-let (do
-                  (when (zero? (:lhs data))
-                    (report "body" "when-let")))
-          :when-not (do
-                      (when (zero? (:rhs data))
-                        (report "body" "when-not")))
-          :defn (report-fn "defn") 
-          :defn- (report-fn "defn-") 
+                    (if (zero? (:lhs data))
+                      (report "true branch" "if-let")
+                      (upd-statistic :covered))
+                    (if (zero? (:rhs data))
+                      (report "false branch" "if-let")
+                      (upd-statistic :covered)))
+          :when (if (zero? (:lhs data))
+                  (report "body" "when")
+                  (upd-statistic :covered))
+          :when-let (if (zero? (:lhs data))
+                      (report "body" "when-let")
+                      (upd-statistic :covered))
+          :when-not (if (zero? (:rhs data))
+                      (report "body" "when-not")
+                      (upd-statistic :covered))
+          :defn (report-fn "defn")
+          :defn- (report-fn "defn-")
           :fn (report-fn "fn")
           :case (let [ast (drop 1 ast)
                       clauses (keep-indexed
@@ -528,36 +605,42 @@
                                 (conj clauses final)
                                 clauses)]
                   (doseq [[id clause] clauses]
-                    (when (zero? (get data id))
-                      (report (first clause) "case"))))
-          :delay (when (zero? (:delayed data))
-                   (report "body" "delay"))
+                    (if (zero? (get data id))
+                      (report (first clause) "case")
+                      (upd-statistic :covered))))
+          :delay (if (zero? (:delayed data))
+                   (report "body" "delay")
+                   (upd-statistic :covered))
           :defmethod (let [[multifn dispatch-val & fn-tail] ast
                            fn-tails (map vector
                                          (normalize-fntail fn-tail)
                                          (range))]
                        (doseq [[[args & _] id] fn-tails]
-                         (when (zero? (get data id))
+                         (if (zero? (get data id))
                            (report (str "arity " args)
                                    (str "defmethod for dispatch value "
-                                        dispatch-val)))))
+                                        dispatch-val))
+                           (upd-statistic :covered))))
           :cond (let [clauses (keep-indexed
                                 vector
                                 (partition 2 ast))]
                   (doseq [[id clause] clauses]
-                    (when (zero? (get data id))
-                      (report (first clause) "cond"))))
+                    (if (zero? (get data id))
+                      (report (first clause) "cond")
+                      (upd-statistic :covered))))
           :condp (let [ast (drop 2 ast)
                        parsed-clauses (first (run 1 [q]
                                                   (match-clauses ast q)))
                        clauses (map #(assoc %1 :id %2)
                                     parsed-clauses (range))]
                    (doseq [{:keys [id test expr default]} clauses]
-                     (when (zero? (get data id))
+                     (if (zero? (get data id))
                        (report (if-not default
                                  test
-                                 "last clause") "condp"))))
+                                 "last clause") "condp")
+                       (upd-statistic :covered))))
           nil)))
+    (report-cobertura-xml)
     (->> @report-msgs
       (sort-by (juxt :line :ns))
       (map :msg)
